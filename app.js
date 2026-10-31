@@ -1,18 +1,24 @@
 import { CLOUD, auth, store, newId } from "./store.js";
 import { eventsFor, buildICS, deliverICS } from "./ics.js";
+import { planVideos, PLAN_KINDS } from "./plan.js";
 
-const KINDS = ["Dangerously ___ (Series)", "Taking Notes", "List", "Rant", "GRWM / Beauty", "Skincare", "Overlay", "Other"];
+const KINDS = ["List", "Substack said it better (Series)", "Let me explain (Psychology)", "Quote", "Carousel", "Building in public",
+  "Dangerously ___ (Series)", "Taking Notes", "Rant", "GRWM / Beauty", "Skincare", "Overlay", "Other"]
+  .concat(PLAN_KINDS).filter((k, i, a) => a.indexOf(k) === i);
 const REACH = ["fyp", "for you", "explore", "explore page", "relatable", "viral", "trending", "reels"];
 const STEPS = ["film", "edit", "post"];
 const NAMES = { film: "Film", edit: "Edit", post: "Post" };
+const VERB = { film: "film", edit: "edit", post: "post" };
+const ICON = { film: "🎬", edit: "✂️", post: "📤" };
 const DONE = { film: "filmed", edit: "edited", post: "posted" };
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DOW_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const PREFS_KEY = "cc.prefs.v1";
 
 const S = {
-  user: null, items: [], view: "upcoming", month: null, selDay: null,
+  user: null, items: [], view: "day", day: null, month: null, filter: "all",
   sheet: null, editing: null, confirmDel: false, toast: "", loadError: "",
   authMode: "signin", authErr: "", busy: false,
   prefs: Object.assign({ filmTime: "10:00", editTime: "14:00", alertMins: 30 }, readPrefs()),
@@ -26,32 +32,42 @@ const pad = n => String(n).padStart(2, "0");
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const today = () => ymd(new Date());
 const addDays = (s, n) => { const d = new Date(s + "T12:00:00"); d.setDate(d.getDate() + n); return ymd(d); };
-const fmt = s => { if (!s) return "No date"; const d = new Date(s + "T12:00:00"); return `${DOW[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`; };
-const short = s => { if (!s) return "—"; const d = new Date(s + "T12:00:00"); return `${d.getDate()} ${MON[d.getMonth()]}`; };
+const dateOf = s => new Date(s + "T12:00:00");
+const fmt = s => { if (!s) return "No date"; const d = dateOf(s); return `${DOW[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`; };
+const short = s => { if (!s) return "—"; const d = dateOf(s); return `${d.getDate()} ${MON[d.getMonth()]}`; };
 const time12 = t => { if (!t) return ""; const [h, m] = t.split(":").map(Number); return `${h % 12 || 12}${m ? ":" + pad(m) : ""} ${h < 12 ? "AM" : "PM"}`; };
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const next = v => { for (const k of STEPS) if (!v[DONE[k]]) return { k, d: v[k] }; return null; };
 const kwList = s => String(s || "").split(",").map(x => x.trim().replace(/^#/, "")).filter(Boolean);
 const $ = id => document.getElementById(id);
+const mondayOf = s => addDays(s, -((dateOf(s).getDay() + 6) % 7));
 let toastT;
 function toast(msg) { S.toast = msg; render(); clearTimeout(toastT); toastT = setTimeout(() => { S.toast = ""; render(); }, 2600); }
+
+// Every film / edit / post step with a date is its own task.
+function tasksOn(day) {
+  const out = [];
+  for (const v of S.items) for (const k of STEPS) if (v[k] === day) out.push({ v, k, done: !!v[DONE[k]] });
+  return out;
+}
+function overdue(t) {
+  const out = [];
+  for (const v of S.items) for (const k of STEPS) if (v[k] && v[k] < t && !v[DONE[k]]) out.push({ v, k, done: false });
+  return out.sort((a, b) => a.v[a.k].localeCompare(b.v[b.k]));
+}
 
 /* ---------- render ---------- */
 function render() {
   if (!S.user) { root.innerHTML = authView() + toastView(); return; }
   const t = today();
-  let nf = 0, ne = 0, np = 0, late = 0;
-  for (const v of S.items) { const n = next(v); if (!n) continue; n.k === "film" ? nf++ : n.k === "edit" ? ne++ : np++; if (n.d && n.d < t) late++; }
   let h = `<div class="wrap"><header class="app"><div><div class="eyebrow">Content Calendar</div><h1>Film, edit, <em>post.</em></h1></div>
-    <button class="icon-btn" id="open-settings" aria-label="Settings and reminders">${gear()}</button></header>`;
+    <button class="icon-btn" id="open-settings" aria-label="Settings, reminders and plan">${gear()}</button></header>`;
   if (S.loadError) h += `<div class="banner">${esc(S.loadError)}</div>`;
   if (!CLOUD) h += `<div class="banner info">Saved on this device only. Connect Supabase (see README) to sync with your laptop.</div>`;
-  h += `<div class="stats"><div class="stat"><b>${nf}</b><span>To film</span></div><div class="stat"><b>${ne}</b><span>To edit</span></div>
-    <div class="stat"><b>${np}</b><span>Ready to post</span></div><div class="stat${late ? " alert" : ""}"><b>${late}</b><span>Overdue</span></div></div>`;
   h += `<div class="bar"><div class="tabs" role="group" aria-label="View">
-    ${tab("upcoming", "Up next")}${tab("month", "Month")}${tab("posted", "Posted")}</div>
+    ${tab("day", "Day")}${tab("month", "Month")}${tab("posted", "Posted")}</div>
     <button class="btn" id="add">+ Add video</button></div>`;
-  h += S.view === "upcoming" ? upcomingView(t) : S.view === "month" ? monthView(t) : postedView(t);
+  h += S.view === "day" ? dayView(t) : S.view === "month" ? monthView(t) : postedView();
   h += `</div>`;
   if (S.sheet === "video") h += videoSheet();
   if (S.sheet === "settings") h += settingsSheet();
@@ -60,99 +76,113 @@ function render() {
 const tab = (v, label) => `<button data-view="${v}" aria-pressed="${S.view === v}">${label}</button>`;
 const toastView = () => S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : "";
 const gear = () => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>`;
+const dots = list => list.map(e => `<i class="dot ${e.k}${e.done ? " done" : ""}"></i>`).join("");
 
-function upcomingView(t) {
-  const open = S.items.filter(next).map(v => ({ v, n: next(v) }))
-    .sort((a, b) => (a.n.d || "9999").localeCompare(b.n.d || "9999"));
-  if (!open.length) return `<div class="empty">Nothing waiting. Add the next video you plan to film.</div>`;
-  const groups = [];
-  for (const o of open) {
-    const key = o.n.d && o.n.d < t ? "late" : (o.n.d || "none");
-    if (!groups.length || groups.at(-1).key !== key) groups.push({ key, list: [] });
-    groups.at(-1).list.push(o.v);
+/* Day: what to do on one day, split into Film / Edit / Post */
+function dayView(t) {
+  const day = S.day || t, isToday = day === t;
+  const d = dateOf(day);
+  const label = isToday ? "Today" : day === addDays(t, 1) ? "Tomorrow" : day === addDays(t, -1) ? "Yesterday" : DOW_LONG[d.getDay()];
+  const mon = mondayOf(day);
+  let strip = "";
+  for (let i = 0; i < 7; i++) {
+    const s = addDays(mon, i), sd = dateOf(s);
+    const cls = ["wd", s === day && "sel", s === t && "today"].filter(Boolean).join(" ");
+    strip += `<button class="${cls}" data-goto="${s}" aria-label="${fmt(s)}"><span class="w">${DOW[sd.getDay()].slice(0, 1)}</span><span class="n">${sd.getDate()}</span><span class="dots">${dots(tasksOn(s))}</span></button>`;
   }
-  return groups.map(g => {
-    let cls = "", label, dl = "";
-    if (g.key === "late") { cls = "late"; label = "Overdue"; }
-    else if (g.key === "none") label = "No date yet";
-    else if (g.key === t) { cls = "today"; label = "Today"; dl = fmt(g.key); }
-    else if (g.key === addDays(t, 1)) { label = "Tomorrow"; dl = fmt(g.key); }
-    else label = fmt(g.key);
-    return `<section class="day ${cls}"><h2>${label}${dl ? ` <span class="d">${dl}</span>` : ""}</h2>${g.list.map(v => card(v, t)).join("")}</section>`;
-  }).join("");
+  let h = `<section class="dayhead"><div class="dnav">
+      <button class="ghost sm" data-step="-1" aria-label="Previous day">‹</button>
+      <div class="dl"><h2>${label}</h2><span class="d">${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}</span></div>
+      <button class="ghost sm" data-step="1" aria-label="Next day">›</button></div>
+      ${isToday ? "" : `<button class="link" data-goto="${t}">Back to today</button>`}
+    <div class="week">${strip}</div></section>`;
+
+  const tasks = tasksOn(day);
+  const late = isToday ? overdue(t) : [];
+  const open = tasks.filter(x => !x.done).length + late.length;
+  h += `<p class="summary">${open ? `${open} thing${open === 1 ? "" : "s"} to do${isToday ? " today" : ""}.` : tasks.length ? "All done for this day 🎉" : "Nothing planned for this day."}</p>`;
+  if (late.length) h += group("late", "⚠️ Catch up", late, t, "Still not done from earlier days");
+  for (const k of STEPS) {
+    const list = tasks.filter(x => x.k === k);
+    h += group(k, `${ICON[k]} ${NAMES[k]}`, list, t);
+  }
+  if (!tasks.length && !late.length) h += `<button class="link center" data-addon="${day}">+ Plan a video for this day</button>`;
+  return h;
 }
-function postedView(t) {
-  const done = S.items.filter(v => !next(v)).sort((a, b) => (b.post || "").localeCompare(a.post || ""));
-  if (!done.length) return `<div class="empty">Posted videos land here once you tick Post.</div>`;
-  return `<section class="day">${done.map(v => card(v, t)).join("")}</section>`;
+function group(k, title, list, t, sub) {
+  const left = list.filter(x => !x.done).length;
+  let h = `<section class="group ${k}"><h3><span>${title}</span><span class="count">${list.length ? `${list.length - left}/${list.length}` : ""}</span></h3>`;
+  if (sub) h += `<p class="hint">${sub}</p>`;
+  if (!list.length) return h + `<div class="none">Nothing to ${VERB[k]}.</div></section>`;
+  return h + list.map(x => task(x, t, k === "late")).join("") + `</section>`;
 }
+function task({ v, k, done }, t, showStep) {
+  const meta = [v.kind, showStep ? `${NAMES[k]} · was due ${short(v[k])}` : "", k === "post" && v.time ? time12(v.time) : ""].filter(Boolean).join(" · ");
+  return `<div class="task${done ? " done" : ""}">
+    <button class="check ${k}" data-tog="${esc(v.id)}" data-k="${k}" aria-pressed="${done}" aria-label="${NAMES[k]} ${esc(v.title)}: ${done ? "done" : "not done"}">${done ? "✓" : ""}</button>
+    <button class="tbody" data-edit="${esc(v.id)}"><span class="meta">${esc(meta)}</span><span class="tt">${esc(v.title)}</span>
+      ${v.onScreen ? `<span class="screen">“${esc(v.onScreen)}”</span>` : ""}</button>
+    ${k === "post" && (v.caption || v.keywords) ? `<button class="link sm" data-copy="${esc(v.id)}">Copy caption</button>` : ""}
+  </div>`;
+}
+
+/* Month: the whole month, colour-coded, filterable by step */
 function monthView(t) {
-  const m = S.month || t.slice(0, 7);
+  const m = S.month || (S.day || t).slice(0, 7);
   const [y, mo] = m.split("-").map(Number);
   const first = new Date(y, mo - 1, 1);
   const start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7)); // Monday first
-  const byDay = {};
-  for (const v of S.items) for (const k of STEPS) if (v[k]) (byDay[v[k]] ||= []).push({ v, k, done: v[DONE[k]] });
+  const show = k => S.filter === "all" || S.filter === k;
   let cells = "";
   for (let i = 0; i < 42; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i); const s = ymd(d);
     if (i === 35 && d.getMonth() !== mo - 1) break;
-    const ev = byDay[s] || [];
-    const cls = ["cell", d.getMonth() !== mo - 1 && "out", s === t && "today", s === S.selDay && "sel"].filter(Boolean).join(" ");
-    cells += `<button class="${cls}" data-day="${s}" aria-label="${fmt(s)}, ${ev.length} item${ev.length === 1 ? "" : "s"}"><span class="num">${d.getDate()}</span>
-      ${ev.slice(0, 3).map(e => `<span class="pill ${e.k}${e.done ? " done" : ""}">${NAMES[e.k]} · ${esc(e.v.title)}</span>`).join("")}
-      ${ev.length > 3 ? `<span class="more">+${ev.length - 3} more</span>` : ""}</button>`;
+    const ev = tasksOn(s).filter(e => show(e.k));
+    const cls = ["cell", d.getMonth() !== mo - 1 && "out", s === t && "today"].filter(Boolean).join(" ");
+    cells += `<button class="${cls}" data-goto="${s}" aria-label="${fmt(s)}, ${ev.length} task${ev.length === 1 ? "" : "s"}"><span class="num">${d.getDate()}</span>
+      ${ev.slice(0, 3).map(e => `<span class="pill ${e.k}${e.done ? " done" : ""}">${esc(e.v.title)}</span>`).join("")}
+      ${ev.length > 3 ? `<span class="more">+${ev.length - 3}</span>` : ""}</button>`;
   }
-  let h = `<div class="month"><div class="mhead"><h2>${MONTHS[mo - 1]} ${y}</h2><div class="nav">
+  // Month totals per step
+  let tot = { film: 0, edit: 0, post: 0 };
+  for (const v of S.items) for (const k of STEPS) if (v[k] && v[k].startsWith(m) && !v[DONE[k]]) tot[k]++;
+  const chip = (f, label) => `<button data-filter="${f}" aria-pressed="${S.filter === f}" class="chip ${f}">${label}</button>`;
+  return `<div class="month"><div class="mhead"><h2>${MONTHS[mo - 1]} ${y}</h2><div class="nav">
     <button class="ghost sm" data-month="-1" aria-label="Previous month">‹</button><button class="ghost sm" data-month="0">Today</button><button class="ghost sm" data-month="1" aria-label="Next month">›</button></div></div>
+    <div class="chips" role="group" aria-label="Show">${chip("all", "All")}${chip("film", `🎬 Film · ${tot.film}`)}${chip("edit", `✂️ Edit · ${tot.edit}`)}${chip("post", `📤 Post · ${tot.post}`)}</div>
     <div class="grid">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(x => `<div class="dow">${x}</div>`).join("")}${cells}</div>
-    <div class="legend"><span><i style="background:var(--film)"></i>Film</span><span><i style="background:var(--edit)"></i>Edit</span><span><i style="background:var(--post)"></i>Post</span></div></div>`;
-  if (S.selDay) {
-    const vids = [...new Set((byDay[S.selDay] || []).map(e => e.v))];
-    h += `<section class="day"><h2>${S.selDay === t ? "Today" : fmt(S.selDay)}</h2>${vids.length ? vids.map(v => card(v, t)).join("") : `<div class="empty">Nothing planned. <button class="link" data-addon="${S.selDay}">Plan a video for this day</button></div>`}</section>`;
-  }
-  return h;
+    <p class="hint">Numbers are what's left to do this month. Tap a day to see its tasks.</p></div>`;
 }
-function card(v, t) {
-  const n = next(v);
-  let h = `<article class="card"><div class="top"><div><div class="kind">${esc(v.kind)}</div><div class="title">${esc(v.title)}</div>`;
-  if (v.onScreen) h += `<div class="screen">On screen: ${esc(v.onScreen)}</div>`;
-  h += `</div><button class="ghost sm" data-edit="${esc(v.id)}">Edit</button></div><div class="steps">`;
-  for (const k of STEPS) {
-    const d = v[DONE[k]];
-    let c = "step" + (d ? " done" : "");
-    if (!d && n && n.k === k) c += v[k] && v[k] < t ? " late" : " next";
-    const tt = short(v[k]) + (k === "post" && v.time ? " · " + time12(v.time).replace(" ", " ") : "");
-    h += `<button class="${c}" data-tog="${esc(v.id)}" data-k="${k}" aria-pressed="${!!d}" aria-label="${NAMES[k]} ${d ? "done" : "not done"}, ${tt}">
-      <span class="n"><i>${d ? "✓" : ""}</i>${NAMES[k]}</span><span class="t">${tt}</span></button>`;
-  }
-  h += `</div>`;
-  const hasCap = v.caption || kwList(v.keywords).length;
-  if (v.notes || hasCap) {
-    h += `<div class="foot">${v.notes ? `<div class="notes">${esc(v.notes)}</div>` : ""}
-      ${hasCap ? `<span class="tag">Caption ready</span><button class="link" data-copy="${esc(v.id)}">Copy caption</button>` : ""}</div>`;
-  }
-  return h + `</article>`;
+
+function postedView() {
+  const done = S.items.filter(v => v.posted).sort((a, b) => (b.post || "").localeCompare(a.post || ""));
+  if (!done.length) return `<div class="empty">Posted videos land here once you tick Post.</div>`;
+  return `<section class="group">${done.map(v => `<div class="task done">
+    <span class="check post" aria-hidden="true">✓</span>
+    <button class="tbody" data-edit="${esc(v.id)}"><span class="meta">${esc([v.kind, short(v.post)].filter(Boolean).join(" · "))}</span><span class="tt">${esc(v.title)}</span></button>
+    ${v.caption || v.keywords ? `<button class="link sm" data-copy="${esc(v.id)}">Copy caption</button>` : ""}</div>`).join("")}</section>`;
 }
 
 function videoSheet() {
   const e = S.editing, isNew = !S.items.some(i => i.id === e.id);
-  const opts = KINDS.concat(KINDS.includes(e.kind) ? [] : [e.kind]).map(k => `<option${k === e.kind ? " selected" : ""}>${esc(k)}</option>`).join("");
+  const opts = KINDS.concat(!e.kind || KINDS.includes(e.kind) ? [] : [e.kind]).map(k => `<option${k === e.kind ? " selected" : ""}>${esc(k)}</option>`).join("");
+  const stepRow = k => `<div class="srow ${k}"><label class="tick"><input type="checkbox" id="f-${DONE[k]}" ${e[DONE[k]] ? "checked" : ""}><span>${ICON[k]} ${NAMES[k]}</span></label>
+    <input id="f-${k}" type="date" value="${esc(e[k])}" aria-label="${NAMES[k]} date">${k === "post" ? `<input id="f-time" type="time" value="${esc(e.time)}" aria-label="Post time">` : ""}</div>`;
+  const more = e.caption || e.keywords || e.notes;
   return `<div class="scrim" id="scrim"><form class="sheet" id="video-form" aria-label="Video details">
     <h3>${isNew ? "New video" : "Edit video"}</h3>
     <div class="f"><label for="f-title">Title</label><input id="f-title" required value="${esc(e.title)}" placeholder="How to become dangerously…"></div>
-    <div class="row"><div class="f"><label for="f-kind">Type</label><select id="f-kind">${opts}</select></div>
-      <div class="f"><label for="f-time">Post time</label><input id="f-time" type="time" value="${esc(e.time)}"></div></div>
+    <div class="f"><label for="f-kind">Type</label><select id="f-kind">${opts}</select></div>
     <div class="f"><label for="f-screen">On-screen text</label><input id="f-screen" value="${esc(e.onScreen)}"></div>
-    <div class="row3"><div class="f"><label for="f-film">Film</label><input id="f-film" type="date" value="${esc(e.film)}"></div>
-      <div class="f"><label for="f-edit">Edit</label><input id="f-edit" type="date" value="${esc(e.edit)}"></div>
-      <div class="f"><label for="f-post">Post</label><input id="f-post" type="date" value="${esc(e.post)}"></div></div>
-    <h4>Caption</h4>
-    <div class="f"><label for="f-caption">Caption</label><textarea id="f-caption" rows="4" placeholder="Add something the video doesn't already say.">${esc(e.caption)}</textarea></div>
-    <div class="f"><label for="f-keywords"><span>Keywords</span><button type="button" class="link" id="add-reach">+ Reach keywords</button></label>
-      <textarea id="f-keywords" rows="2" placeholder="confidence, eldest daughter, grwm">${esc(e.keywords)}</textarea>
-      <span class="hint">Separate with commas. Copied as {keyword, keyword}.</span></div>
-    <div class="f"><label for="f-notes">Notes</label><textarea id="f-notes" rows="3">${esc(e.notes)}</textarea></div>
+    <div class="f"><label>When</label><div class="srows">${STEPS.map(stepRow).join("")}</div>
+      <span class="hint">Leave Film empty for things you don't film, like carousels.</span></div>
+    <details${more ? " open" : ""}><summary>Caption, keywords & notes</summary>
+      <div class="f"><label for="f-caption">Caption</label><textarea id="f-caption" rows="4" placeholder="Add something the video doesn't already say.">${esc(e.caption)}</textarea></div>
+      <div class="f"><label for="f-keywords"><span>Keywords</span><button type="button" class="link" id="add-reach">+ Reach keywords</button></label>
+        <textarea id="f-keywords" rows="2" placeholder="confidence, eldest daughter, grwm">${esc(e.keywords)}</textarea>
+        <span class="hint">Separate with commas. Copied as {keyword, keyword}.</span></div>
+      <div class="f"><label for="f-notes">Notes</label><textarea id="f-notes" rows="3">${esc(e.notes)}</textarea></div>
+    </details>
     <div class="acts">${isNew ? "<span></span>" : `<button type="button" class="danger" id="del">${S.confirmDel ? "Tap again to delete" : "Delete"}</button>`}
       <div class="r">${isNew ? "" : `<button type="button" class="ghost" id="remind-one">Add reminders</button>`}
       <button type="button" class="ghost" id="cancel">Cancel</button><button type="submit" class="btn" ${S.busy ? "disabled" : ""}>Save</button></div></div>
@@ -161,14 +191,20 @@ function videoSheet() {
 function settingsSheet() {
   const p = S.prefs;
   const upcoming = S.items.filter(next).length;
+  const have = new Set(S.items.map(i => i.id));
+  const plan = planVideos(), missing = plan.filter(v => !have.has(v.id)).length;
   return `<div class="scrim" id="scrim"><form class="sheet" id="settings-form" aria-label="Settings">
-    <h3>Reminders</h3>
+    <h3>Settings</h3>
+    <h4>Road to 1K plan</h4>
+    <p class="hint">Adds the Nov 2 – Dec 31 posting plan: listicles on Mon and Thu, "Substack said it better" on Tue, "Let me explain" on Wed, a carousel on Fri and a quote reel on Sat. Filming is on the Sunday before. Your own videos stay as they are.</p>
+    <button type="button" class="btn" id="add-plan" ${missing && !S.busy ? "" : "disabled"}>${missing ? `Add the plan (${missing} videos)` : "Plan added ✓"}</button>
+    <h4>Reminders</h4>
     <p class="hint">Reminders go into your phone's Calendar app, with an alert before each step. Add them again after you change dates; your calendar replaces the old ones.</p>
     <div class="row3"><div class="f"><label for="p-film">Film at</label><input id="p-film" type="time" value="${esc(p.filmTime)}"></div>
       <div class="f"><label for="p-edit">Edit at</label><input id="p-edit" type="time" value="${esc(p.editTime)}"></div>
       <div class="f"><label for="p-alert">Alert before</label><select id="p-alert">${[0, 15, 30, 60, 120].map(m => `<option value="${m}"${+p.alertMins === m ? " selected" : ""}>${m ? m + " min" : "At start"}</option>`).join("")}</select></div></div>
     <p class="hint">Posts use each video's own post time.</p>
-    <button type="button" class="btn" id="remind-all" ${upcoming ? "" : "disabled"}>Add all upcoming to my calendar (${upcoming})</button>
+    <button type="button" class="ghost" id="remind-all" ${upcoming ? "" : "disabled"}>Add all upcoming to my calendar (${upcoming})</button>
     <h4>Install</h4>
     <p class="hint">iPhone: open this site in Safari, tap Share, then Add to Home Screen. Android: tap the ⋮ menu, then Install app.</p>
     <h4>Account</h4>
@@ -194,22 +230,20 @@ function authView() {
 async function load() {
   try { S.items = await store.list(); S.loadError = ""; }
   catch (e) { S.loadError = navigator.onLine ? `Couldn't load your videos: ${e.message}` : "You're offline. Showing your last saved copy."; S.items = store.cached() || S.items; }
-  await seedIfEmpty(); render();
-}
-async function seedIfEmpty() {
-  const flag = "cc.seeded." + S.user.id;
-  try { if (S.items.length || localStorage.getItem(flag)) return; localStorage.setItem(flag, "1"); } catch { return; }
-  const t = today();
-  const base = { kind: KINDS[0], onScreen: "", caption: "", keywords: "", time: "18:00", filmed: true, edited: false, posted: false, notes: "Filmed as a GRWM talking video." };
-  const seeds = [
-    { ...base, id: newId(), title: "How to become dangerously confident", film: t, edit: addDays(t, 1), post: addDays(t, 5) },
-    { ...base, id: newId(), title: "How to become dangerously unbothered", film: t, edit: addDays(t, 3), post: addDays(t, 12) },
-  ];
-  for (const v of seeds) { S.items.push(v); try { await store.save(v, S.items); } catch {} }
+  render();
 }
 async function persist(v, rollback) {
   try { await store.save(v, S.items); }
   catch (e) { rollback(); render(); toast(navigator.onLine ? "Couldn't save. Try again." : "You're offline. Changes weren't saved."); }
+}
+async function addPlan() {
+  const have = new Set(S.items.map(i => i.id));
+  const add = planVideos().filter(v => !have.has(v.id));
+  if (!add.length) return;
+  const before = S.items;
+  S.items = S.items.concat(add); S.busy = true; render();
+  try { await store.saveMany(add, S.items); S.busy = false; S.sheet = null; S.view = "day"; S.day = null; render(); toast(`Added ${add.length} videos to your calendar`); }
+  catch { S.items = before; S.busy = false; render(); toast(navigator.onLine ? "Couldn't add the plan. Try again." : "You're offline. Try again when you're back online."); }
 }
 
 /* ---------- events ---------- */
@@ -217,26 +251,28 @@ root.addEventListener("click", async ev => {
   if (ev.target.id === "scrim") return closeSheet();
   const b = ev.target.closest("button"); if (!b) return;
   const d = b.dataset;
-  if (d.view) { S.view = d.view; render(); return; }
-  if (b.id === "add" || d.addon) { openNew(d.addon); return; }
+  if (d.view) { S.view = d.view; if (d.view === "month") S.month = null; render(); return; }
+  if (b.id === "add" || d.addon) { openNew(d.addon || (S.view === "day" ? S.day : null)); return; }
   if (b.id === "open-settings") { S.sheet = "settings"; render(); return; }
   if (b.id === "cancel") return closeSheet();
   if (b.id === "auth-switch") { S.authMode = S.authMode === "signup" ? "signin" : "signup"; S.authErr = ""; render(); return; }
+  if (d.goto) { S.day = d.goto === today() ? null : d.goto; S.view = "day"; render(); return; }
+  if (d.step) { S.day = addDays(S.day || today(), Number(d.step)); if (S.day === today()) S.day = null; render(); return; }
+  if (d.filter) { S.filter = d.filter; render(); return; }
   if (d.month !== undefined) {
-    if (d.month === "0") { S.month = null; S.selDay = today(); }
-    else { const [y, m] = (S.month || today().slice(0, 7)).split("-").map(Number); const nd = new Date(y, m - 1 + Number(d.month), 1); S.month = `${nd.getFullYear()}-${pad(nd.getMonth() + 1)}`; }
+    if (d.month === "0") { S.month = null; S.day = null; }
+    else { const [y, m] = (S.month || (S.day || today()).slice(0, 7)).split("-").map(Number); const nd = new Date(y, m - 1 + Number(d.month), 1); S.month = `${nd.getFullYear()}-${pad(nd.getMonth() + 1)}`; }
     render(); return;
   }
-  if (d.day) { S.selDay = S.selDay === d.day ? null : d.day; render(); return; }
   if (d.edit) { S.editing = { ...S.items.find(i => i.id === d.edit) }; S.confirmDel = false; S.sheet = "video"; render(); return; }
   if (d.tog) {
+    // Each step is ticked on its own: filming, editing and posting are separate tasks.
     const v = S.items.find(i => i.id === d.tog), before = { ...v }, f = DONE[d.k];
     v[f] = !v[f];
-    if (v[f]) { if (d.k !== "film") v.filmed = true; if (d.k === "post") v.edited = true; }
-    else { if (d.k === "film") { v.edited = false; v.posted = false; } if (d.k === "edit") v.posted = false; }
     render(); persist(v, () => Object.assign(v, before)); return;
   }
   if (d.copy) { copyCaption(S.items.find(i => i.id === d.copy)); return; }
+  if (b.id === "add-plan") { await addPlan(); return; }
   if (b.id === "add-reach") {
     const el = $("f-keywords"), have = kwList(el.value);
     el.value = have.concat(REACH.filter(k => !have.includes(k))).join(", "); return;
@@ -288,6 +324,8 @@ function readVideoForm() {
   const e = S.editing;
   e.title = $("f-title").value.trim() || "Untitled video"; e.kind = $("f-kind").value; e.time = $("f-time").value;
   e.onScreen = $("f-screen").value.trim(); e.film = $("f-film").value; e.edit = $("f-edit").value; e.post = $("f-post").value;
+  e.filmed = $("f-filmed").checked; e.edited = $("f-edited").checked; e.posted = $("f-posted").checked;
+  if (!e.film) e.filmed = true; // nothing to film (e.g. carousels)
   e.caption = $("f-caption").value.trim(); e.keywords = kwList($("f-keywords").value).join(", "); e.notes = $("f-notes").value.trim();
   return e;
 }

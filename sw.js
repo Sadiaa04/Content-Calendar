@@ -1,8 +1,8 @@
 // Offline support: the app shell is cached so the app opens without signal.
 // Bump VERSION whenever you change app files so phones pick up the update.
-const VERSION = "cc-v1";
-const SHELL = ["./", "index.html", "styles.css", "app.js", "store.js", "ics.js", "config.js", "manifest.webmanifest",
-  "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
+const VERSION = "cc-v2";
+const SHELL = ["./", "index.html", "styles.css", "app.js", "store.js", "ics.js", "plan.js", "config.js", "manifest.webmanifest",
+  "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {
