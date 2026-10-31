@@ -58,6 +58,12 @@ export const store = {
     const { error } = await c.from("videos").upsert(toRow(v));
     if (error) throw error; writeJSON(CACHE_KEY, all); return v;
   },
+  async saveMany(list, all) {
+    if (!CLOUD) { writeJSON(LOCAL_KEY, all); return; }
+    const c = await client();
+    const { error } = await c.from("videos").upsert(list.map(toRow));
+    if (error) throw error; writeJSON(CACHE_KEY, all);
+  },
   async remove(id, all) {
     if (!CLOUD) { writeJSON(LOCAL_KEY, all); return; }
     const c = await client();

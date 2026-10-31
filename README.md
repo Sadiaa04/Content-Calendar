@@ -4,9 +4,10 @@ Plan when to film, edit and post each Reel. Works as a website and installs on y
 
 **What it does**
 
-- **Up next**: every video sorted by the step that's due next (film, edit or post). Tap a step to tick it off.
-- **Month**: the whole month at a glance, colour-coded by step.
+- **Day**: what to do on one day, split into 🎬 Film, ✂️ Edit and 📤 Post. Each step is its own task with its own tick. Today also shows a "Catch up" list of anything overdue. Swipe through the week strip or use ‹ ›.
+- **Month**: the whole month at a glance, colour-coded by step. Filter to just Film, Edit or Post. Tap a day to open it.
 - **Posted**: everything you've published.
+- **Road to 1K plan**: Settings → "Add the plan" loads the Nov 2 – Dec 31, 2026 posting plan (`plan.js`). Adding it twice never duplicates anything.
 - **Captions & keywords** for each video, with one-tap copy as `caption` + `{keyword, keyword}`.
 - **Reminders**: sends film, edit and post days to your phone's Calendar app with an alert.
 - Works offline. Changes on one device appear on the other.
@@ -27,7 +28,7 @@ At this point the app already works, but saves on that one device only.
 ### 2. Turn on sync (Supabase)
 
 1. Sign up at [supabase.com](https://supabase.com) and create a **New project** (any name, pick the region closest to you, e.g. Mumbai).
-2. Left sidebar → **SQL Editor** → **New query**. Paste everything from `supabase/schema.sql` and press **Run**.
+2. Left sidebar → **SQL Editor** → **New query**. Paste everything from `schema.sql` and press **Run**.
 3. Left sidebar → **Authentication** → **URL Configuration**. Set **Site URL** to your GitHub Pages address from step 1.
 4. Left sidebar → **Project Settings** → **API**. Copy the **Project URL** and the **anon public** key.
 5. On GitHub, open `config.js`, click the pencil icon, paste the two values between the quotes, and **Commit changes**.
@@ -62,6 +63,7 @@ All the code is plain HTML, CSS and JavaScript. Nothing to install or build.
 | `styles.css` | Colours, fonts, layout (colour tokens at the top) |
 | `app.js` | Screens and behaviour (video types list is `KINDS` at the top) |
 | `store.js` | Saving and syncing |
+| `plan.js` | The Nov–Dec 2026 posting plan |
 | `ics.js` | Calendar reminders |
 | `sw.js` | Offline support. **Bump `VERSION` after any change** so installed apps update. |
 
